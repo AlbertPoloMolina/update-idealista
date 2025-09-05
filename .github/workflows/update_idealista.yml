@@ -2,7 +2,7 @@ name: Update_Idealista
 
 on:
   schedule:
-    - cron: "0 10 * * *"   # Ejecuta todos los días a las 09:00 UTC
+    - cron: "10 9 * * *"   # Ejecuta todos los días a las 09:00 UTC
   workflow_dispatch:
 
 permissions:
