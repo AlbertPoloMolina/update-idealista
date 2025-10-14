@@ -4,6 +4,8 @@ import pandas as pd
 import json
 import os
 from datetime import datetime
+import geopandas as gpd
+from shapely.geometry import Point
 
 # ==== CREDENCIALES IDEALISTA ====
 CLIENT_ID = os.getenv("CLIENT_ID")
@@ -191,6 +193,50 @@ if __name__ == "__main__":
         df_final = update_csv(CSV_PATH, df_total)
 
         print(f"💾 Archivo actualizado: {CSV_PATH}")
+
+                # === ASIGNAR CUSEC A VIVIENDAS SIN DISTRITO ===
+        GEOJSON_PATH = "Lavall_wgs84.geojson"  # ruta a tu archivo GeoJSON
+
+        if os.path.exists(GEOJSON_PATH):
+            print("🗺️ Revisando viviendas sin CUSEC...")
+            try:
+                df_final = pd.read_csv(CSV_PATH)
+                # Filtrar las que no tienen CUSEC
+                sin_cusec = df_final[df_final['CUSEC'].isna() | (df_final['CUSEC'] == '')]
+
+                if not sin_cusec.empty:
+                    print(f"📍 {len(sin_cusec)} viviendas sin CUSEC. Calculando distritos...")
+
+                    # Crear geometría con coordenadas
+                    sin_cusec['geometry'] = sin_cusec.apply(
+                        lambda r: Point(r['longitude'], r['latitude']), axis=1
+                    )
+                    gdf_sin_cusec = gpd.GeoDataFrame(sin_cusec, geometry='geometry', crs="EPSG:4326")
+
+                    # Cargar distritos (solo CUSEC)
+                    gdf_distritos = gpd.read_file(GEOJSON_PATH)[['CUSEC', 'geometry']]
+                    if gdf_distritos.crs != gdf_sin_cusec.crs:
+                        gdf_distritos = gdf_distritos.to_crs(gdf_sin_cusec.crs)
+
+                    # Unión espacial solo para las viviendas sin CUSEC
+                    gdf_asignadas = gpd.sjoin(gdf_sin_cusec, gdf_distritos, how="left", predicate="within")
+
+                    # Actualizar valores de CUSEC en el DataFrame principal
+                    df_final.set_index('propertyCode', inplace=True)
+                    gdf_asignadas.set_index('propertyCode', inplace=True)
+                    df_final.update(gdf_asignadas[['CUSEC']])
+                    df_final.reset_index(inplace=True)
+
+                    # Guardar CSV actualizado
+                    df_final.to_csv(CSV_PATH, index=False, encoding='utf-8')
+                    print("✅ CUSEC asignado y CSV actualizado.")
+                else:
+                    print("✅ Todas las viviendas ya tienen CUSEC.")
+            except Exception as e:
+                print(f"⚠️ Error al asignar CUSEC: {e}")
+        else:
+            print(f"⚠️ No se encontró el archivo GeoJSON en {GEOJSON_PATH}. No se asignará CUSEC.")
+
         print(f"📊 Total acumulado: {len(df_final)}")
         
         # Crear y enviar mensaje a Telegram
