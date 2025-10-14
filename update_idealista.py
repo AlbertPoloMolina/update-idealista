@@ -85,11 +85,10 @@ def get_all_results(operation: str, token: str) -> pd.DataFrame:
     results = search_api(url, token)
 
     if 'elementList' not in results or not results['elementList']:
-        print(f"⚠️  No se encontraron resultados para {operation}")
         return pd.DataFrame()
 
     df = results_to_df(results, operation)
-    print(f"📄 Página {page}: {len(df)} propiedades encontradas para {operation}")
+
     return df
 
 
@@ -106,10 +105,8 @@ def update_csv(csv_path: str, new_data: pd.DataFrame) -> pd.DataFrame:
 
 def send_telegram_message(message: str) -> bool:
     if not TELEGRAM_BOT_TOKEN:
-        print("⚠️  Token de Telegram no configurado. No se enviará mensaje.")
         return False
     if not TELEGRAM_CHAT_ID:
-        print("⚠️  Chat ID de Telegram no configurado. No se enviará mensaje.")
         return False
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -117,7 +114,6 @@ def send_telegram_message(message: str) -> bool:
         response = requests.post(url, data=data)
         response.raise_for_status()
         ok = bool(response.json().get("ok"))
-        print("✅ Mensaje enviado a Telegram exitosamente" if ok else "❌ Error al enviar mensaje a Telegram")
         return ok
     except Exception as e:
         print(f"❌ Error al enviar mensaje a Telegram: {e}")
@@ -168,23 +164,19 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str) -> pd.DataFrame:
     mask_missing = df['CUSEC'].isna() | (df['CUSEC'] == '')
     df_missing = df.loc[mask_missing].copy()
     if df_missing.empty:
-        print("✅ Todas las viviendas ya tienen CUSEC.")
         return df
 
     if not {'latitude', 'longitude'}.issubset(df_missing.columns):
-        print("❌ No hay columnas latitude/longitude en el CSV. No se puede asignar CUSEC.")
         return df
 
     df_missing = df_missing.dropna(subset=['latitude', 'longitude']).copy()
     if df_missing.empty:
-        print("⚠️ No hay coordenadas válidas para asignar CUSEC.")
         return df
 
     df_missing['geometry'] = df_missing.apply(lambda r: Point(r['longitude'], r['latitude']), axis=1)
     gdf_props = gpd.GeoDataFrame(df_missing, geometry='geometry', crs="EPSG:4326")
 
     if not os.path.exists(geojson_path):
-        print(f"⚠️ No se encontró el archivo GeoJSON en {geojson_path}. No se asignará CUSEC.")
         return df
 
     gdf_dist = gpd.read_file(geojson_path)
@@ -213,7 +205,6 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str) -> pd.DataFrame:
         df.loc[mask_missing, 'CUSEC'] = df.loc[mask_missing, 'propertyCode'].map(cusec_by_code).fillna(df.loc[mask_missing, 'CUSEC'])
         after = df['CUSEC'].notna().sum()
         assigned = after - before
-        print(f"✅ CUSEC asignados: {assigned} | Cobertura total: {df['CUSEC'].notna().mean():.2%}")
         df.to_csv(csv_path, index=False, encoding='utf-8')
     else:
         print("❌ No se pudo identificar la columna de CUSEC tras el join.")
@@ -224,29 +215,20 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str) -> pd.DataFrame:
 if __name__ == "__main__":
     print("🚀 Iniciando actualización de Idealista...")
     try:
-        print("🔑 Obteniendo token de acceso...")
         token = get_access_token()
 
-        print("🏠 Consultando propiedades en alquiler...")
         df_rent = get_all_results("rent", token)
 
-        print("🏠 Consultando propiedades en venta...")
         df_sale = get_all_results("sale", token)
 
         df_total = pd.concat([df_rent, df_sale], ignore_index=True)
-        print(f"📈 Nuevas propiedades obtenidas: {len(df_total)}")
 
         df_final = update_csv(CSV_PATH, df_total)
-        print(f"💾 Archivo actualizado: {CSV_PATH}")
 
-        print("🗺️ Revisando viviendas sin CUSEC...")
         df_final = assign_cusec_to_csv(CSV_PATH, GEOJSON_PATH)
 
-        print(f"📊 Total acumulado: {len(df_final)}")
-        print("📱 Enviando resumen a Telegram...")
         summary_message = create_summary_message(df_total, df_final, "completa")
         send_telegram_message(summary_message)
-        print("🎉 Proceso completado exitosamente!")
 
     except Exception as e:
         error_message = f"❌ <b>Error en la actualización de Idealista:</b>\n\n{str(e)}"
@@ -255,4 +237,3 @@ if __name__ == "__main__":
             send_telegram_message(error_message)
         except Exception:
             pass
-
