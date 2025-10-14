@@ -158,7 +158,7 @@ def create_summary_message(df_total, df_final, operation_type):
     message = f"""
 🏠 <b>Actualización Idealista Completada</b>
 ⏰ <b>Fecha:</b> {current_time}
-📍 <b>Ubicación:</b> Valencia (5km radio)
+📍 <b>Ubicación:</b> La Vall d'Uixó (5km radio)
 
 📊 <b>Resumen de resultados:</b>
    • Nuevas propiedades: {total_new}
@@ -201,6 +201,9 @@ if __name__ == "__main__":
             print("🗺️ Revisando viviendas sin CUSEC...")
             try:
                 df_final = pd.read_csv(CSV_PATH)
+                if 'CUSEC' not in df_final.columns:
+                    df_final['CUSEC'] = None
+
                 # Filtrar las que no tienen CUSEC
                 sin_cusec = df_final[df_final['CUSEC'].isna() | (df_final['CUSEC'] == '')]
 
@@ -219,7 +222,7 @@ if __name__ == "__main__":
                         gdf_distritos = gdf_distritos.to_crs(gdf_sin_cusec.crs)
 
                     # Unión espacial solo para las viviendas sin CUSEC
-                    gdf_asignadas = gpd.sjoin(gdf_sin_cusec, gdf_distritos, how="left", predicate="within")
+                    gdf_asignadas = gpd.sjoin(gdf_sin_cusec, gdf_distritos, how="left", predicate="intersects")
 
                     # Actualizar valores de CUSEC en el DataFrame principal
                     df_final.set_index('propertyCode', inplace=True)
