@@ -2,3 +2,6 @@ requests
 pandas
 geopandas
 shapely
+pyproj
+fiona
+rtree
