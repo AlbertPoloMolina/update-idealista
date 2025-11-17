@@ -5,12 +5,13 @@ from datetime import datetime
 import io
 import ssl
 import urllib.request
+import json
 
 import certifi
 import numpy as np
 import pandas as pd
 
-from sklearn.model_selection import train_test_split, KFold, cross_val_score
+from sklearn.model_selection import train_test_split, KFold, cross_val_score, GridSearchCV
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
 from sklearn.pipeline import Pipeline
@@ -168,6 +169,30 @@ def construir_modelo(preprocessor: ColumnTransformer) -> Pipeline:
     return model
 
 
+def optimizar_modelo(preprocessor: ColumnTransformer, X_train: pd.DataFrame, y_train: pd.Series):
+    """
+    Realiza una búsqueda de hiperparámetros (GridSearchCV) para el Random Forest.
+    """
+    pipeline = construir_modelo(preprocessor)
+    param_grid = {
+        "regressor__regressor__n_estimators": [300, 400, 500],
+        "regressor__regressor__max_depth": [None, 12, 16],
+        "regressor__regressor__min_samples_split": [2, 5, 10],
+        "regressor__regressor__min_samples_leaf": [1, 2, 4],
+        "regressor__regressor__max_features": ["sqrt", "log2", 0.7],
+    }
+    search = GridSearchCV(
+        estimator=pipeline,
+        param_grid=param_grid,
+        scoring="neg_root_mean_squared_error",
+        cv=3,
+        n_jobs=-1,
+        refit=True,
+    )
+    search.fit(X_train, y_train)
+    return search.best_estimator_, search.best_params_
+
+
 def evaluar_modelo(model: Pipeline, X_test: pd.DataFrame, y_test: pd.Series) -> dict:
     """Devuelve métricas en test sin imprimir nada."""
     y_pred = model.predict(X_test)
@@ -241,14 +266,13 @@ def main() -> None:
         random_state=RANDOM_STATE,
     )
 
-    # 3) Construcción y entrenamiento del modelo
-    model = construir_modelo(preprocessor)
-    model.fit(X_train, y_train)
+    # 3) Optimización y entrenamiento del modelo
+    model, best_params = optimizar_modelo(preprocessor, X_train, y_train)
 
     # 4) Evaluación (test + validación cruzada)
     metrics_test = evaluar_modelo(model, X_test, y_test)
     metrics_cv = validacion_cruzada(model, X_train, y_train)
-    metrics = {"test": metrics_test, "cv": metrics_cv}
+    metrics = {"test": metrics_test, "cv": metrics_cv, "best_params": best_params}
 
     # 5) Guardar modelo
     model_dir = Path("./modelado")
