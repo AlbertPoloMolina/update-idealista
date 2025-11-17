@@ -33,8 +33,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: python modelado.py
 
-      - name: Upload models
-        uses: actions/upload-artifact@v4
-        with:
-          name: modelos-rf
-          path: modelado/
+      - name: Commit and push models
+        run: |
+         git config --global user.name "AlbertPoloMolina"
+         git config --global user.email "apolomo@uoc.edu"
+         git add modelado/
+         git commit -m "Update modelos [skip ci]" || echo "No changes to commit"
+         git push
