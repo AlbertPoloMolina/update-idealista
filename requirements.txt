@@ -6,12 +6,6 @@ pyproj
 fiona
 rtree
 joblib
-io
-ssl
-urllib.request
 sklearn
 certifi
 numpy
-pathlib
-datetime
-os
