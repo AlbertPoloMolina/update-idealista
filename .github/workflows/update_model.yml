@@ -2,17 +2,19 @@ name: Update model (every 3 days)
 
 on:
   schedule:
-    # Runs at 00:00 UTC every 3 days of the month (cron uses day-of-month stepping: */3).
-    - cron: "0 0 */3 * *"
-  workflow_dispatch: {}
+    - cron: "10 0 */3 * *"   # Ejecuta cada 3  días 
+  workflow_dispatch:
 
+permissions:
+  contents: write
+  
 jobs:
-  run-model:
-    name: Run modelado.py and upload resulting model(s)
+  run-script:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -21,20 +23,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            pip install scikit-learn pandas numpy joblib certifi
-          fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run modelado.py
+      - name: Run script
+        env:
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: python modelado.py
+
+      - name: Commit and push CSV
         run: |
-          # Ensure the script is executable (if not) and run it
-          python modelado.py
-
-      - name: Upload model artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: modelos
-          path: modelado/*.joblib
+          git config --global user.name "AlbertPoloMolina"
+          git config --global user.email "apolomo@uoc.edu"
+          git commit -m "Update CSV [skip ci]" || echo "No changes to commit"
+          git push
