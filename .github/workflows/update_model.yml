@@ -23,7 +23,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pwd
+          ls -R
+          echo "=== requirements.txt ==="
+          cat requirements.txt || echo "requirements.txt not found"
 
       - name: Run script
         env:
