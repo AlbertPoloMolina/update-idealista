@@ -6,6 +6,6 @@ pyproj
 fiona
 rtree
 joblib
-sklearn
+scikit-learn
 certifi
 numpy
