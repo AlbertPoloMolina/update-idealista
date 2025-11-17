@@ -33,10 +33,3 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: python modelado.py
-
-      - name: Commit and push CSV
-        run: |
-          git config --global user.name "AlbertPoloMolina"
-          git config --global user.email "apolomo@uoc.edu"
-          git commit -m "Update CSV [skip ci]" || echo "No changes to commit"
-          git push
