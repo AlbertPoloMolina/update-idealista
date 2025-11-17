@@ -1,0 +1,11 @@
+requests
+pandas
+geopandas
+shapely
+pyproj
+fiona
+rtree
+joblib
+scikit-learn
+certifi
+numpy
