@@ -15,4 +15,3 @@ numpy
 pathlib
 datetime
 os
-__future__
