@@ -33,3 +33,9 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: python modelado.py
+
+      - name: Subir modelos
+        uses: actions/upload-artifact@v4
+        with:
+          name: modelos-rf
+          path: modelado/
