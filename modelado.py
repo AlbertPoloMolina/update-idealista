@@ -1,19 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-"""
-Script de modelado y validación de precios inmobiliarios.
-
-Este script:
-- Carga el histórico de viviendas desde GitHub.
-- Realiza una limpieza mínima y prepara el dataset.
-- Construye y entrena un modelo de Random Forest encapsulado en un Pipeline.
-- Evalúa el modelo (test + validación cruzada) sin generar salidas por pantalla.
-- Guarda el modelo (y las métricas) con la fecha actual en './modelado/'.
-- Mueve previamente cualquier modelo existente en './modelado/' a './modelado/anteriores/'.
-
-No contiene ni `print` ni generación de gráficas.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
