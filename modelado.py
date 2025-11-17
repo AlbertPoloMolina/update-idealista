@@ -126,7 +126,7 @@ def configurar_preprocesamiento(df: pd.DataFrame):
         X[col] = X[col].apply(_coerce_binary_value).astype("Int64")
 
     for col in cat_cols:
-        X[col] = X[col].astype("string")
+        X[col] = X[col].astype("string").fillna("NA")
 
     preprocessor = ColumnTransformer(
         transformers=[
