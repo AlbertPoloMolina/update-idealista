@@ -66,6 +66,38 @@ def preparar_dataset(hist: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _coerce_binary_value(value) -> int:
+    """Convierte distintos formatos a 0/1."""
+    if pd.isna(value):
+        return 0
+    if isinstance(value, (bool, np.bool_)):
+        return int(value)
+    if isinstance(value, (int, np.integer)):
+        return int(bool(value))
+
+    if isinstance(value, str):
+        val = value.strip()
+        if not val:
+            return 0
+        lower = val.lower()
+        if lower in {"true", "1", "yes", "y", "si", "sí"}:
+            return 1
+        if lower in {"false", "0", "no", "n"}:
+            return 0
+        if val.startswith("{") and val.endswith("}"):
+            try:
+                val_json = json.loads(val.replace("'", '"'))
+                if isinstance(val_json, dict):
+                    for key in ("hasParkingSpace", "parkingSpace", "value"):
+                        if key in val_json:
+                            return int(bool(val_json[key]))
+            except Exception:
+                pass
+        if "true" in lower:
+            return 1
+    return 0
+
+
 def configurar_preprocesamiento(df: pd.DataFrame):
     """
     Construye X, y y el preprocesador (ColumnTransformer).
@@ -91,7 +123,7 @@ def configurar_preprocesamiento(df: pd.DataFrame):
 
     # Conversión de tipos
     for col in bin_cols:
-        X[col] = X[col].astype("Int64").fillna(0)
+        X[col] = X[col].apply(_coerce_binary_value).astype("Int64")
 
     for col in cat_cols:
         X[col] = X[col].astype("string")
