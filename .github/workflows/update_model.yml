@@ -1,4 +1,4 @@
-name: Scheduled model training (every 3 days)
+name: Update model (every 3 days)
 
 on:
   schedule:
