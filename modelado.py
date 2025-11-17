@@ -214,8 +214,6 @@ def guardar_modelo(model: Pipeline, metrics: dict, model_dir: Path) -> Path:
     - 'metrics': diccionario con métricas de test y CV
     """
     model_dir.mkdir(parents=True, exist_ok=True)
-
-    # Mover modelos anteriores
     mover_modelos_anteriores(model_dir)
 
     fecha = datetime.now().strftime("%Y%m%d")
