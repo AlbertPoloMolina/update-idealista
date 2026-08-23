@@ -17,18 +17,32 @@ CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# ==== PARÁMETROS DE BÚSQUEDA ====
+# ==== PARÁMETROS GENERALES ====
 BASE_URL = 'https://api.idealista.com/3.5/'
 COUNTRY = 'es'
 LANGUAGE = 'es'
 MAX_ITEMS = '50'
 PROPERTY_TYPE = 'homes'
 ORDER = 'priceDown'
-CENTER = '39.825749,-0.232300'
-DISTANCE = '5000'
 SORT = 'desc'
-CSV_PATH = "historial_idealista.csv"
-GEOJSON_PATH = "Lavall_wgs84.geojson"
+
+# ==== CONFIGURACIÓN DE UBICACIONES ====
+LOCATIONS = [
+    {
+        "name": "La Vall d'Uixó (5km radio)",
+        "center": "39.825749,-0.232300",
+        "distance": "5000",
+        "csv_path": "historial_idealista.csv",
+        "geojson_path": "Lavall_wgs84.geojson",
+    },
+    {
+        "name": "Córdoba (20km radio)",
+        "center": "37.892375,-4.780324",
+        "distance": "20000",
+        "csv_path": "historial_idealista_cordoba.csv",
+        "geojson_path": None,
+    },
+]
 
 
 def get_access_token() -> str:
@@ -47,15 +61,15 @@ def get_access_token() -> str:
     return response.json()["access_token"]
 
 
-def define_search_url(operation: str, page: int) -> str:
+def define_search_url(operation: str, page: int, center: str, distance: str) -> str:
     return (
         BASE_URL
         + COUNTRY
         + '/search?operation=' + operation
         + '&maxItems=' + MAX_ITEMS
         + '&order=' + ORDER
-        + '&center=' + CENTER
-        + '&distance=' + DISTANCE
+        + '&center=' + center
+        + '&distance=' + distance
         + '&propertyType=' + PROPERTY_TYPE
         + '&sort=' + SORT
         + f'&numPage={page}'
@@ -79,20 +93,41 @@ def results_to_df(results: dict, operation: str) -> pd.DataFrame:
     return df
 
 
-def get_all_results(operation: str, token: str) -> pd.DataFrame:
+def get_all_results(operation: str, token: str, center: str, distance: str) -> pd.DataFrame:
     page = 1
-    url = define_search_url(operation, page)
-    results = search_api(url, token)
+    all_dfs = []
 
-    if 'elementList' not in results or not results['elementList']:
+    while True:
+        url = define_search_url(operation, page, center, distance)
+        results = search_api(url, token)
+
+        if 'elementList' not in results or not results['elementList']:
+            break
+
+        df = results_to_df(results, operation)
+        if not df.empty:
+            all_dfs.append(df)
+
+        total_pages = int(results.get('totalPages', 1))
+        actual_page = int(results.get('actualPage', page))
+
+        if actual_page >= total_pages:
+            break
+
+        page += 1
+
+    if not all_dfs:
         return pd.DataFrame()
 
-    df = results_to_df(results, operation)
-
-    return df
+    return pd.concat(all_dfs, ignore_index=True)
 
 
 def update_csv(csv_path: str, new_data: pd.DataFrame) -> pd.DataFrame:
+    if new_data.empty:
+        if os.path.exists(csv_path):
+            return pd.read_csv(csv_path, header=0, encoding='utf-8')
+        return pd.DataFrame()
+
     if os.path.exists(csv_path):
         old_data = pd.read_csv(csv_path, header=0, encoding='utf-8')
         combined = pd.concat([old_data, new_data], ignore_index=True)
@@ -120,7 +155,7 @@ def send_telegram_message(message: str) -> bool:
         return False
 
 
-def create_summary_message(df_total: pd.DataFrame, df_final: pd.DataFrame, operation_type: str) -> str:
+def create_summary_message(location_name: str, csv_path: str, df_total: pd.DataFrame, df_final: pd.DataFrame) -> str:
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     total_new = len(df_total) if df_total is not None else 0
     total_accumulated = len(df_final) if df_final is not None else 0
@@ -140,7 +175,7 @@ def create_summary_message(df_total: pd.DataFrame, df_final: pd.DataFrame, opera
     message = f"""
 🏠 <b>Actualización Idealista Completada</b>
 ⏰ <b>Fecha:</b> {current_time}
-📍 <b>Ubicación:</b> La Vall d'Uixó (5km radio)
+📍 <b>Ubicación:</b> {location_name}
 
 📊 <b>Resumen de resultados:</b>
    • Nuevas propiedades: {total_new}
@@ -149,12 +184,15 @@ def create_summary_message(df_total: pd.DataFrame, df_final: pd.DataFrame, opera
    • Total acumulado: {total_accumulated}{price_info}
 
 ✅ <b>Estado:</b> Archivo CSV actualizado correctamente
-📁 <b>Ruta:</b> {CSV_PATH}
+📁 <b>Ruta:</b> {csv_path}
 """
     return message.strip()
 
 
-def assign_cusec_to_csv(csv_path: str, geojson_path: str) -> pd.DataFrame:
+def assign_cusec_to_csv(csv_path: str, geojson_path: str | None) -> pd.DataFrame:
+    if not geojson_path or not os.path.exists(geojson_path):
+        return pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"No existe {csv_path}")
     df = pd.read_csv(csv_path)
@@ -175,9 +213,6 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str) -> pd.DataFrame:
 
     df_missing['geometry'] = df_missing.apply(lambda r: Point(r['longitude'], r['latitude']), axis=1)
     gdf_props = gpd.GeoDataFrame(df_missing, geometry='geometry', crs="EPSG:4326")
-
-    if not os.path.exists(geojson_path):
-        return df
 
     gdf_dist = gpd.read_file(geojson_path)
     if 'CUSEC' not in gdf_dist.columns:
@@ -212,27 +247,52 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str) -> pd.DataFrame:
     return df
 
 
+def process_location(location: dict, token: str) -> None:
+    name = location["name"]
+    center = location["center"]
+    distance = location["distance"]
+    csv_path = location["csv_path"]
+    geojson_path = location.get("geojson_path")
+
+    print(f"\n📍 Procesando ubicación: {name} (Centro: {center}, Radio: {int(distance)//1000}km)...")
+
+    df_rent = get_all_results("rent", token, center, distance)
+    print(f"   • Alquiler: {len(df_rent)} propiedades obtenidas")
+
+    df_sale = get_all_results("sale", token, center, distance)
+    print(f"   • Venta: {len(df_sale)} propiedades obtenidas")
+
+    df_total = pd.concat([df_rent, df_sale], ignore_index=True)
+
+    df_final = update_csv(csv_path, df_total)
+    print(f"   • CSV actualizado en '{csv_path}' con {len(df_final)} filas acumuladas.")
+
+    if geojson_path:
+        df_final = assign_cusec_to_csv(csv_path, geojson_path)
+
+    summary_message = create_summary_message(name, csv_path, df_total, df_final)
+    send_telegram_message(summary_message)
+
+
 if __name__ == "__main__":
     print("🚀 Iniciando actualización de Idealista...")
     try:
         token = get_access_token()
 
-        df_rent = get_all_results("rent", token)
-
-        df_sale = get_all_results("sale", token)
-
-        df_total = pd.concat([df_rent, df_sale], ignore_index=True)
-
-        df_final = update_csv(CSV_PATH, df_total)
-
-        df_final = assign_cusec_to_csv(CSV_PATH, GEOJSON_PATH)
-
-        summary_message = create_summary_message(df_total, df_final, "completa")
-        send_telegram_message(summary_message)
+        for loc in LOCATIONS:
+            try:
+                process_location(loc, token)
+            except Exception as loc_error:
+                error_message = f"❌ <b>Error al procesar {loc['name']}:</b>\n\n{str(loc_error)}"
+                print(f"Error en {loc['name']}: {loc_error}")
+                try:
+                    send_telegram_message(error_message)
+                except Exception:
+                    pass
 
     except Exception as e:
-        error_message = f"❌ <b>Error en la actualización de Idealista:</b>\n\n{str(e)}"
-        print(f"Error: {e}")
+        error_message = f"❌ <b>Error general en la actualización de Idealista:</b>\n\n{str(e)}"
+        print(f"Error general: {e}")
         try:
             send_telegram_message(error_message)
         except Exception:

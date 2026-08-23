@@ -37,6 +37,6 @@ jobs:
         run: |
           git config --global user.name "AlbertPoloMolina"
           git config --global user.email "apolomo@uoc.edu"
-          git add historial_idealista.csv
+          git add historial_idealista.csv historial_idealista_cordoba.csv
           git commit -m "Update CSV [skip ci]" || echo "No changes to commit"
           git push
