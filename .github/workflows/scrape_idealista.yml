@@ -12,6 +12,15 @@ on:
           - "cordoba"
           - "vall"
           - "all"
+      operation:
+        description: "Operación ('all', 'rent', 'sale')"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - "all"
+          - "sale"
+          - "rent"
       max_pages:
         description: "Número máximo de páginas por operación"
         required: true
@@ -42,7 +51,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           PROXY_URL: ${{ secrets.PROXY_URL }}
-        run: python scraper_idealista.py --location ${{ github.event.inputs.location }} --max-pages ${{ github.event.inputs.max_pages }}
+        run: python scraper_idealista.py --location ${{ github.event.inputs.location }} --operation ${{ github.event.inputs.operation }} --max-pages ${{ github.event.inputs.max_pages }}
 
       - name: Commit and push CSV
         run: |

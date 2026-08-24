@@ -490,23 +490,37 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str | None) -> pd.DataFrame
     return df
 
 
-def process_location(location: dict, max_pages: int = DEFAULT_MAX_PAGES, proxy: str | None = None) -> None:
+def process_location(
+    location: dict,
+    operation: str = "all",
+    max_pages: int = DEFAULT_MAX_PAGES,
+    proxy: str | None = None
+) -> None:
     name = location["name"]
     csv_path = location["csv_path"]
     geojson_path = location.get("geojson_path")
 
-    print(f"\n📍 Procesando ubicación vía Web Scraping: {name}...")
+    print(f"\n📍 Procesando ubicación vía Web Scraping: {name} (Operación: {operation})...")
 
-    df_rent = scrape_location_operation(location, "rent", max_pages=max_pages, proxy=proxy)
-    print(f"   • Alquiler: {len(df_rent)} propiedades obtenidas")
+    dfs_to_combine = []
 
-    # Pausa de cortesía entre operaciones
-    time.sleep(random.uniform(4.0, 7.0))
+    if operation in ("rent", "all"):
+        df_rent = scrape_location_operation(location, "rent", max_pages=max_pages, proxy=proxy)
+        print(f"   • Alquiler: {len(df_rent)} propiedades obtenidas")
+        if not df_rent.empty:
+            dfs_to_combine.append(df_rent)
 
-    df_sale = scrape_location_operation(location, "sale", max_pages=max_pages, proxy=proxy)
-    print(f"   • Venta: {len(df_sale)} propiedades obtenidas")
+    if operation == "all":
+        # Pausa de cortesía entre operaciones
+        time.sleep(random.uniform(4.0, 7.0))
 
-    df_total = pd.concat([df_rent, df_sale], ignore_index=True)
+    if operation in ("sale", "all"):
+        df_sale = scrape_location_operation(location, "sale", max_pages=max_pages, proxy=proxy)
+        print(f"   • Venta: {len(df_sale)} propiedades obtenidas")
+        if not df_sale.empty:
+            dfs_to_combine.append(df_sale)
+
+    df_total = pd.concat(dfs_to_combine, ignore_index=True) if dfs_to_combine else pd.DataFrame()
     df_final = update_csv(csv_path, df_total)
     print(f"   • CSV actualizado en '{csv_path}' con {len(df_final)} filas acumuladas.")
 
@@ -524,6 +538,12 @@ def parse_args():
         choices=list(LOCATIONS.keys()) + ["all"],
         default="all",
         help="Ubicación a procesar: 'vall', 'cordoba' o 'all' (por defecto: all)."
+    )
+    parser.add_argument(
+        "--operation", "-o",
+        choices=["all", "rent", "sale"],
+        default="all",
+        help="Tipo de operación a procesar: 'rent', 'sale' o 'all' (por defecto: all)."
     )
     parser.add_argument(
         "--max-pages", "-m",
@@ -544,11 +564,11 @@ if __name__ == "__main__":
     args = parse_args()
     target_locations = LOCATIONS.values() if args.location == "all" else [LOCATIONS[args.location]]
 
-    print(f"🚀 Iniciando Web Scraping de Idealista (Ubicación: '{args.location}', Límite máx. páginas: {args.max_pages})...")
+    print(f"🚀 Iniciando Web Scraping de Idealista (Ubicación: '{args.location}', Operación: '{args.operation}', Límite máx. páginas: {args.max_pages})...")
     
     for loc in target_locations:
         try:
-            process_location(loc, max_pages=args.max_pages, proxy=args.proxy)
+            process_location(loc, operation=args.operation, max_pages=args.max_pages, proxy=args.proxy)
         except Exception as e:
             error_message = f"❌ <b>Error en Scraping para {loc['name']}:</b>\n\n{str(e)}"
             print(f"Error: {e}")
