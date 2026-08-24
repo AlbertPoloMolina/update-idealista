@@ -248,16 +248,72 @@ def parse_property_card(article: BeautifulSoup, operation: str, loc_info: dict) 
 def parse_page_items(html: str, operation: str, loc_info: dict) -> list[dict]:
     """Parsea el HTML de la página y extrae todos los anuncios."""
     soup = BeautifulSoup(html, "html.parser")
-    articles = soup.find_all("article", class_="item")
+    
+    # 1. Buscar todos los artículos de inmuebles
+    articles = soup.find_all("article", class_=lambda c: c and "item" in c.split())
     if not articles:
-        # Probar selectores alternativos
         articles = soup.find_all("article", attrs={"data-adid": True})
+    if not articles:
+        articles = soup.find_all("div", attrs={"data-adid": True})
 
     items = []
     for art in articles:
         prop = parse_property_card(art, operation, loc_info)
-        if prop:
+        if prop and prop.get("propertyCode"):
             items.append(prop)
+
+    # 2. Si no se encontraron artículos por HTML, intentar extraer JSON-LD estructurado
+    if not items:
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string or "")
+                if isinstance(data, dict) and data.get("@type") == "ItemList":
+                    for elem in data.get("itemListElement", []):
+                        item_data = elem.get("item", {})
+                        if isinstance(item_data, dict) and "name" in item_data:
+                            url = item_data.get("url", "")
+                            match_code = re.search(r"/inmueble/(\d+)/", url)
+                            if match_code:
+                                code = match_code.group(1)
+                                price = None
+                                offers = item_data.get("offers", {})
+                                if isinstance(offers, dict):
+                                    price = float(offers.get("price", 0)) or None
+
+                                items.append({
+                                    "propertyCode": str(code),
+                                    "thumbnail": item_data.get("image", ""),
+                                    "externalReference": None,
+                                    "numPhotos": 0,
+                                    "floor": None,
+                                    "price": price,
+                                    "priceInfo": f"{{'price': {{'amount': {price}}}}}" if price else None,
+                                    "propertyType": "homes",
+                                    "operation": operation,
+                                    "size": None,
+                                    "exterior": None,
+                                    "rooms": None,
+                                    "bathrooms": 1,
+                                    "address": item_data.get("name", ""),
+                                    "province": loc_info.get("province"),
+                                    "municipality": loc_info.get("municipality"),
+                                    "country": "es",
+                                    "latitude": None,
+                                    "longitude": None,
+                                    "showAddress": True,
+                                    "url": url,
+                                    "distance": 0,
+                                    "description": item_data.get("description", ""),
+                                    "hasVideo": False,
+                                    "status": "good",
+                                    "newDevelopment": False,
+                                    "hasLift": None,
+                                    "parkingSpace": False,
+                                    "updateDate": datetime.now().strftime("%Y-%m-%d"),
+                                })
+            except Exception:
+                pass
+
     return items
 
 
@@ -273,23 +329,23 @@ def scrape_location_operation(
 
     for page in range(1, max_pages + 1):
         url = build_page_url(slug, operation, page)
-        print(f"   🌐 Consultando página {page}/{max_pages}: {url}")
+        print(f"   🌐 Consultando {operation} página {page}/{max_pages}: {url}")
 
         status_code, html = fetch_html(url, proxy=proxy)
 
         # Detección de bloqueos anti-bot (DataDome / Cloudflare)
-        if status_code in (403, 429) or "datadome" in html.lower() or "challenge-running" in html.lower():
-            print(f"   🚨 Bloqueo anti-bot detectado (HTTP {status_code}). DataDome/Cloudflare interceptó la petición.")
-            print("   💡 Se recomienda usar un proxy residencial español (--proxy http://...) para evitar el bloqueo por IP.")
+        if status_code in (403, 429) or "datadome" in html.lower() or "challenge-running" in html.lower() or "geo.captcha" in html.lower():
+            print(f"   🚨 Bloqueo anti-bot detectado (HTTP {status_code}). DataDome/Cloudflare interceptó la petición para '{operation}'.")
+            print("   💡 Se recomienda usar un proxy residencial español (--proxy http://...) si ejecutas desde GitHub Actions.")
             break
 
         if status_code != 200:
-            print(f"   ⚠️ Respuesta inesperada: HTTP {status_code}. Deteniendo paginación.")
+            print(f"   ⚠️ Respuesta inesperada: HTTP {status_code} para '{operation}'. Deteniendo paginación.")
             break
 
         items = parse_page_items(html, operation, loc_info)
         if not items:
-            print(f"   ℹ️ No se encontraron más anuncios en la página {page}.")
+            print(f"   ℹ️ No se encontraron más anuncios en la página {page} para '{operation}'.")
             break
 
         new_items = 0
@@ -300,17 +356,17 @@ def scrape_location_operation(
                 all_items.append(item)
                 new_items += 1
 
-        print(f"      -> {new_items} inmuebles extraídos (Total acumulado en operación: {len(all_items)})")
+        print(f"      -> {new_items} inmuebles extraídos (Total en {operation}: {len(all_items)})")
 
         # Comprobar si hay botón 'siguiente' en la paginación
         soup = BeautifulSoup(html, "html.parser")
         next_button = soup.find("li", class_="next") or soup.find("a", class_="icon-arrow-right-after")
         if not next_button:
-            print("   ℹ️ Última página alcanzada.")
+            print(f"   ℹ️ Última página de {operation} alcanzada.")
             break
 
         # Pausa aleatoria entre peticiones para emular comportamiento humano
-        delay = random.uniform(2.5, 4.5)
+        delay = random.uniform(3.0, 6.0)
         time.sleep(delay)
 
     if not all_items:
@@ -327,10 +383,18 @@ def update_csv(csv_path: str, new_data: pd.DataFrame) -> pd.DataFrame:
 
     if os.path.exists(csv_path):
         old_data = pd.read_csv(csv_path, header=0, encoding='utf-8', low_memory=False)
+        # Asegurar compatibilidad de tipos para evitar FutureWarning
+        for col in new_data.columns:
+            if col in old_data.columns:
+                try:
+                    new_data[col] = new_data[col].astype(old_data[col].dtype)
+                except Exception:
+                    pass
         combined = pd.concat([old_data, new_data], ignore_index=True)
         combined.drop_duplicates(subset=["propertyCode", "updateDate"], inplace=True)
     else:
         combined = new_data
+
     combined.to_csv(csv_path, index=False, encoding='utf-8')
     return combined
 
@@ -388,20 +452,24 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str | None) -> pd.DataFrame
         return pd.read_csv(csv_path, low_memory=False) if os.path.exists(csv_path) else pd.DataFrame()
 
     df = pd.read_csv(csv_path, low_memory=False)
+    if not {'latitude', 'longitude'}.issubset(df.columns):
+        return df
+
     if 'CUSEC' not in df.columns:
         df['CUSEC'] = None
 
+    # Solo intentar si hay coordenadas válidas no nulas
     mask_missing = df['CUSEC'].isna() | (df['CUSEC'] == '')
-    df_missing = df.loc[mask_missing].copy()
-    if df_missing.empty or not {'latitude', 'longitude'}.issubset(df_missing.columns):
-        return df
-
-    df_missing = df_missing.dropna(subset=['latitude', 'longitude']).copy()
+    df_missing = df.loc[mask_missing]
     if df_missing.empty:
         return df
 
-    df_missing['geometry'] = df_missing.apply(lambda r: Point(r['longitude'], r['latitude']), axis=1)
-    gdf_props = gpd.GeoDataFrame(df_missing, geometry='geometry', crs="EPSG:4326")
+    df_valid_coords = df_missing.dropna(subset=['latitude', 'longitude']).copy()
+    if df_valid_coords.empty:
+        return df
+
+    df_valid_coords['geometry'] = df_valid_coords.apply(lambda r: Point(r['longitude'], r['latitude']), axis=1)
+    gdf_props = gpd.GeoDataFrame(df_valid_coords, geometry='geometry', crs="EPSG:4326")
 
     gdf_dist = gpd.read_file(geojson_path)
     if 'CUSEC' not in gdf_dist.columns:
@@ -413,9 +481,11 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str | None) -> pd.DataFrame
 
     gdf_join = gpd.sjoin(gdf_props, gdf_dist, how='left', predicate='intersects')
     if 'CUSEC_right' in gdf_join.columns:
-        cusec_map = gdf_join.set_index('propertyCode')['CUSEC_right'].astype(str).to_dict()
-        df.loc[mask_missing, 'CUSEC'] = df.loc[mask_missing, 'propertyCode'].map(cusec_map).fillna(df.loc[mask_missing, 'CUSEC'])
-        df.to_csv(csv_path, index=False, encoding='utf-8')
+        cusec_map = gdf_join.set_index('propertyCode')['CUSEC_right'].dropna().astype(str).to_dict()
+        if cusec_map:
+            df['CUSEC'] = df['CUSEC'].astype(object)
+            df.loc[mask_missing, 'CUSEC'] = df.loc[mask_missing, 'propertyCode'].map(cusec_map).fillna(df.loc[mask_missing, 'CUSEC'])
+            df.to_csv(csv_path, index=False, encoding='utf-8')
 
     return df
 
@@ -429,6 +499,9 @@ def process_location(location: dict, max_pages: int = DEFAULT_MAX_PAGES, proxy: 
 
     df_rent = scrape_location_operation(location, "rent", max_pages=max_pages, proxy=proxy)
     print(f"   • Alquiler: {len(df_rent)} propiedades obtenidas")
+
+    # Pausa de cortesía entre operaciones
+    time.sleep(random.uniform(4.0, 7.0))
 
     df_sale = scrape_location_operation(location, "sale", max_pages=max_pages, proxy=proxy)
     print(f"   • Venta: {len(df_sale)} propiedades obtenidas")
