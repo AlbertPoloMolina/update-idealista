@@ -1,6 +1,9 @@
 import os
+import sys
 import json
+import time
 import base64
+import argparse
 from datetime import datetime
 
 import requests
@@ -17,7 +20,7 @@ CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# ==== PARÁMETROS GENERALES ====
+# ==== PARÁMETROS GENERALES Y SEGURIDAD ====
 BASE_URL = 'https://api.idealista.com/3.5/'
 COUNTRY = 'es'
 LANGUAGE = 'es'
@@ -25,24 +28,27 @@ MAX_ITEMS = '50'
 PROPERTY_TYPE = 'homes'
 ORDER = 'priceDown'
 SORT = 'desc'
+REQUEST_DELAY = 1.2        # Pausa en segundos entre peticiones para evitar HTTP 429
+REQUEST_TIMEOUT = 25       # Timeout en segundos por petición HTTP
+DEFAULT_MAX_PAGES = 20     # Límite duro de páginas por consulta para evitar bucles infinitos
 
 # ==== CONFIGURACIÓN DE UBICACIONES ====
-LOCATIONS = [
-    {
+LOCATIONS = {
+    "vall": {
         "name": "La Vall d'Uixó (5km radio)",
         "center": "39.825749,-0.232300",
         "distance": "5000",
         "csv_path": "historial_idealista.csv",
         "geojson_path": "Lavall_wgs84.geojson",
     },
-    {
-        "name": "Córdoba (20km radio)",
+    "cordoba": {
+        "name": "Córdoba (5km radio)",
         "center": "37.892375,-4.780324",
-        "distance": "20000",
+        "distance": "5000",
         "csv_path": "historial_idealista_cordoba.csv",
         "geojson_path": None,
     },
-]
+}
 
 
 def get_access_token() -> str:
@@ -56,7 +62,7 @@ def get_access_token() -> str:
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
     }
 
-    response = requests.post(token_url, data=data, headers=headers)
+    response = requests.post(token_url, data=data, headers=headers, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
     return response.json()["access_token"]
 
@@ -77,9 +83,26 @@ def define_search_url(operation: str, page: int, center: str, distance: str) -> 
     )
 
 
-def search_api(url: str, token: str) -> dict:
+def search_api(url: str, token: str, max_retries: int = 3) -> dict:
     headers = {'Content-Type': "application/json", 'Authorization': 'Bearer ' + token}
-    response = requests.post(url, headers=headers)
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            if response.status_code == 429:
+                wait_time = (attempt + 1) * 5
+                print(f"   ⏳ Rate limit detectado (HTTP 429). Pausa de {wait_time}s antes de reintentar ({attempt + 1}/{max_retries})...")
+                time.sleep(wait_time)
+                continue
+            response.raise_for_status()
+            return json.loads(response.text)
+        except requests.exceptions.RequestException as req_err:
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 3
+                print(f"   ⚠️ Error de red ({req_err}). Reintentando en {wait_time}s ({attempt + 1}/{max_retries})...")
+                time.sleep(wait_time)
+            else:
+                raise req_err
+
     response.raise_for_status()
     return json.loads(response.text)
 
@@ -93,13 +116,29 @@ def results_to_df(results: dict, operation: str) -> pd.DataFrame:
     return df
 
 
-def get_all_results(operation: str, token: str, center: str, distance: str) -> pd.DataFrame:
+def get_all_results(operation: str, token: str, center: str, distance: str, max_pages: int = DEFAULT_MAX_PAGES) -> pd.DataFrame:
     page = 1
     all_dfs = []
+    visited_pages = set()
 
     while True:
+        # Salvaguarda 1: Límite duro contra bucles infinitos
+        if page > max_pages:
+            print(f"   🛑 Límite de seguridad alcanzado ({max_pages} páginas) para '{operation}'. Deteniendo paginación.")
+            break
+
+        # Salvaguarda 2: Detección de ciclos de páginas repetidas
+        if page in visited_pages:
+            print(f"   🛑 Detección de ciclo de página repetida (pág. {page}). Deteniendo paginación.")
+            break
+        visited_pages.add(page)
+
         url = define_search_url(operation, page, center, distance)
-        results = search_api(url, token)
+        try:
+            results = search_api(url, token)
+        except Exception as e:
+            print(f"   ⚠️ Detenida la descarga en la página {page} para '{operation}' ({e}). Conservando datos descargados.")
+            break
 
         if 'elementList' not in results or not results['elementList']:
             break
@@ -108,13 +147,18 @@ def get_all_results(operation: str, token: str, center: str, distance: str) -> p
         if not df.empty:
             all_dfs.append(df)
 
-        total_pages = int(results.get('totalPages', 1))
-        actual_page = int(results.get('actualPage', page))
+        try:
+            total_pages = int(results.get('totalPages', 1))
+            actual_page = int(results.get('actualPage', page))
+        except (ValueError, TypeError):
+            total_pages = 1
+            actual_page = page
 
         if actual_page >= total_pages:
             break
 
         page += 1
+        time.sleep(REQUEST_DELAY)
 
     if not all_dfs:
         return pd.DataFrame()
@@ -125,11 +169,11 @@ def get_all_results(operation: str, token: str, center: str, distance: str) -> p
 def update_csv(csv_path: str, new_data: pd.DataFrame) -> pd.DataFrame:
     if new_data.empty:
         if os.path.exists(csv_path):
-            return pd.read_csv(csv_path, header=0, encoding='utf-8')
+            return pd.read_csv(csv_path, header=0, encoding='utf-8', low_memory=False)
         return pd.DataFrame()
 
     if os.path.exists(csv_path):
-        old_data = pd.read_csv(csv_path, header=0, encoding='utf-8')
+        old_data = pd.read_csv(csv_path, header=0, encoding='utf-8', low_memory=False)
         combined = pd.concat([old_data, new_data], ignore_index=True)
         combined.drop_duplicates(subset=["propertyCode", "updateDate"], inplace=True)
     else:
@@ -146,7 +190,7 @@ def send_telegram_message(message: str) -> bool:
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-        response = requests.post(url, data=data)
+        response = requests.post(url, data=data, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         ok = bool(response.json().get("ok"))
         return ok
@@ -191,13 +235,14 @@ def create_summary_message(location_name: str, csv_path: str, df_total: pd.DataF
 
 def assign_cusec_to_csv(csv_path: str, geojson_path: str | None) -> pd.DataFrame:
     if not geojson_path or not os.path.exists(geojson_path):
-        return pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+        return pd.read_csv(csv_path, low_memory=False) if os.path.exists(csv_path) else pd.DataFrame()
 
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"No existe {csv_path}")
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(csv_path, low_memory=False)
     if 'CUSEC' not in df.columns:
         df['CUSEC'] = None
+    df['CUSEC'] = df['CUSEC'].astype(object)
 
     mask_missing = df['CUSEC'].isna() | (df['CUSEC'] == '')
     df_missing = df.loc[mask_missing].copy()
@@ -235,7 +280,7 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str | None) -> pd.DataFrame
         cusec_dist_col = next((c for c in cusec_cols if c.endswith('__dist')), ('CUSEC' if 'CUSEC' in gdf_join.columns else (cusec_cols[0] if cusec_cols else None)))
 
     if cusec_dist_col and (cusec_dist_col in gdf_join.columns):
-        cusec_by_code = gdf_join.set_index('propertyCode')[cusec_dist_col].to_dict()
+        cusec_by_code = gdf_join.set_index('propertyCode')[cusec_dist_col].astype(str).to_dict()
         before = df['CUSEC'].notna().sum()
         df.loc[mask_missing, 'CUSEC'] = df.loc[mask_missing, 'propertyCode'].map(cusec_by_code).fillna(df.loc[mask_missing, 'CUSEC'])
         after = df['CUSEC'].notna().sum()
@@ -247,7 +292,7 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str | None) -> pd.DataFrame
     return df
 
 
-def process_location(location: dict, token: str) -> None:
+def process_location(location: dict, token: str, max_pages: int = DEFAULT_MAX_PAGES) -> None:
     name = location["name"]
     center = location["center"]
     distance = location["distance"]
@@ -256,10 +301,10 @@ def process_location(location: dict, token: str) -> None:
 
     print(f"\n📍 Procesando ubicación: {name} (Centro: {center}, Radio: {int(distance)//1000}km)...")
 
-    df_rent = get_all_results("rent", token, center, distance)
+    df_rent = get_all_results("rent", token, center, distance, max_pages=max_pages)
     print(f"   • Alquiler: {len(df_rent)} propiedades obtenidas")
 
-    df_sale = get_all_results("sale", token, center, distance)
+    df_sale = get_all_results("sale", token, center, distance, max_pages=max_pages)
     print(f"   • Venta: {len(df_sale)} propiedades obtenidas")
 
     df_total = pd.concat([df_rent, df_sale], ignore_index=True)
@@ -274,14 +319,35 @@ def process_location(location: dict, token: str) -> None:
     send_telegram_message(summary_message)
 
 
+def parse_args():
+    default_loc = os.getenv("LOCATION", "all").lower()
+    parser = argparse.ArgumentParser(description="Actualizador de Idealista multi-ubicación con protecciones anti-bucle.")
+    parser.add_argument(
+        "--location", "-l",
+        choices=list(LOCATIONS.keys()) + ["all"],
+        default=default_loc if default_loc in list(LOCATIONS.keys()) + ["all"] else "all",
+        help="Ubicación a procesar: 'vall', 'cordoba' o 'all' (por defecto: all o variable de entorno LOCATION)."
+    )
+    parser.add_argument(
+        "--max-pages", "-m",
+        type=int,
+        default=DEFAULT_MAX_PAGES,
+        help=f"Límite máximo de páginas por operación (por defecto: {DEFAULT_MAX_PAGES})."
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    print("🚀 Iniciando actualización de Idealista...")
+    args = parse_args()
+    target_locations = LOCATIONS.values() if args.location == "all" else [LOCATIONS[args.location]]
+
+    print(f"🚀 Iniciando actualización de Idealista (Ubicación: '{args.location}', Límite máx. páginas: {args.max_pages})...")
     try:
         token = get_access_token()
 
-        for loc in LOCATIONS:
+        for loc in target_locations:
             try:
-                process_location(loc, token)
+                process_location(loc, token, max_pages=args.max_pages)
             except Exception as loc_error:
                 error_message = f"❌ <b>Error al procesar {loc['name']}:</b>\n\n{str(loc_error)}"
                 print(f"Error en {loc['name']}: {loc_error}")

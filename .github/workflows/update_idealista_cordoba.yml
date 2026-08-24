@@ -1,0 +1,42 @@
+name: Update Idealista - Cordoba
+
+on:
+  schedule:
+    - cron: "10 15 * * *"   # Ejecuta todos los días a las 15:10 UTC (desfasado para no saturar API)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run script for Cordoba
+        env:
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: python update_idealista.py --location cordoba
+
+      - name: Commit and push CSV
+        run: |
+          git config --global user.name "AlbertPoloMolina"
+          git config --global user.email "apolomo@uoc.edu"
+          git add historial_idealista_cordoba.csv
+          git commit -m "Update CSV Cordoba [skip ci]" || echo "No changes to commit"
+          git push

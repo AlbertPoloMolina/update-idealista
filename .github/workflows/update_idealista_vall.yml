@@ -1,13 +1,13 @@
-name: Update_Idealista
+name: Update Idealista - La Vall d'Uixo
 
 on:
   schedule:
-    - cron: "10 9 * * *"   # Ejecuta todos los días a las 09:00 UTC
+    - cron: "10 9 * * *"   # Ejecuta todos los días a las 09:10 UTC
   workflow_dispatch:
 
 permissions:
   contents: write
-  
+
 jobs:
   run-script:
     runs-on: ubuntu-latest
@@ -25,18 +25,18 @@ jobs:
         run: |
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run script
+      - name: Run script for La Vall d'Uixo
         env:
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: python update_idealista.py
+        run: python update_idealista.py --location vall
 
       - name: Commit and push CSV
         run: |
           git config --global user.name "AlbertPoloMolina"
           git config --global user.email "apolomo@uoc.edu"
-          git add historial_idealista.csv historial_idealista_cordoba.csv
-          git commit -m "Update CSV [skip ci]" || echo "No changes to commit"
+          git add historial_idealista.csv
+          git commit -m "Update CSV La Vall d'Uixo [skip ci]" || echo "No changes to commit"
           git push
