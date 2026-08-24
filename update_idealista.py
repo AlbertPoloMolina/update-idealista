@@ -12,6 +12,11 @@ import geopandas as gpd
 from shapely.geometry import Point
 
 
+class IdealistaQuotaError(Exception):
+    """Excepción lanzada cuando se supera la cuota de la API o rate limit persistente."""
+    pass
+
+
 # ==== CREDENCIALES IDEALISTA ====
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
@@ -28,9 +33,9 @@ MAX_ITEMS = '50'
 PROPERTY_TYPE = 'homes'
 ORDER = 'priceDown'
 SORT = 'desc'
-REQUEST_DELAY = 1.2        # Pausa en segundos entre peticiones para evitar HTTP 429
+REQUEST_DELAY = 1.2        # Pausa en segundos entre peticiones para respetar rate limit (1 req/s)
 REQUEST_TIMEOUT = 25       # Timeout en segundos por petición HTTP
-DEFAULT_MAX_PAGES = 20     # Límite duro de páginas por consulta para evitar bucles infinitos
+DEFAULT_MAX_PAGES = 5      # Límite por defecto de páginas por consulta para proteger cuota mensual
 
 # ==== CONFIGURACIÓN DE UBICACIONES ====
 LOCATIONS = {
@@ -51,7 +56,7 @@ LOCATIONS = {
 }
 
 
-def get_access_token() -> str:
+def get_access_token(session: requests.Session | None = None) -> str:
     credentials = f"{CLIENT_ID}:{CLIENT_SECRET}"
     encoded_credentials = base64.b64encode(credentials.encode()).decode()
 
@@ -62,7 +67,8 @@ def get_access_token() -> str:
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
     }
 
-    response = requests.post(token_url, data=data, headers=headers, timeout=REQUEST_TIMEOUT)
+    http_client = session if session is not None else requests
+    response = http_client.post(token_url, data=data, headers=headers, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
     return response.json()["access_token"]
 
@@ -83,18 +89,34 @@ def define_search_url(operation: str, page: int, center: str, distance: str) -> 
     )
 
 
-def search_api(url: str, token: str, max_retries: int = 3) -> dict:
+def search_api(url: str, token: str, session: requests.Session | None = None, max_retries: int = 3) -> dict:
     headers = {'Content-Type': "application/json", 'Authorization': 'Bearer ' + token}
+    http_client = session if session is not None else requests
+
     for attempt in range(max_retries):
         try:
-            response = requests.post(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            response = http_client.post(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            
             if response.status_code == 429:
                 wait_time = (attempt + 1) * 5
-                print(f"   ⏳ Rate limit detectado (HTTP 429). Pausa de {wait_time}s antes de reintentar ({attempt + 1}/{max_retries})...")
-                time.sleep(wait_time)
-                continue
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("message", response.text[:200])
+                except Exception:
+                    error_msg = response.text[:200]
+
+                print(f"   ⏳ Rate limit / Cuota detectado (HTTP 429: {error_msg}). Pausa de {wait_time}s ({attempt + 1}/{max_retries})...")
+                
+                if attempt < max_retries - 1:
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise IdealistaQuotaError(f"HTTP 429 - Cuota mensual agotada o exceso de peticiones: {error_msg}")
+
             response.raise_for_status()
             return json.loads(response.text)
+        except IdealistaQuotaError:
+            raise
         except requests.exceptions.RequestException as req_err:
             if attempt < max_retries - 1:
                 wait_time = (attempt + 1) * 3
@@ -116,13 +138,20 @@ def results_to_df(results: dict, operation: str) -> pd.DataFrame:
     return df
 
 
-def get_all_results(operation: str, token: str, center: str, distance: str, max_pages: int = DEFAULT_MAX_PAGES) -> pd.DataFrame:
+def get_all_results(
+    operation: str,
+    token: str,
+    center: str,
+    distance: str,
+    session: requests.Session | None = None,
+    max_pages: int = DEFAULT_MAX_PAGES
+) -> pd.DataFrame:
     page = 1
     all_dfs = []
     visited_pages = set()
 
     while True:
-        # Salvaguarda 1: Límite duro contra bucles infinitos
+        # Salvaguarda 1: Límite duro contra bucles infinitos y protección de cuota
         if page > max_pages:
             print(f"   🛑 Límite de seguridad alcanzado ({max_pages} páginas) para '{operation}'. Deteniendo paginación.")
             break
@@ -135,7 +164,10 @@ def get_all_results(operation: str, token: str, center: str, distance: str, max_
 
         url = define_search_url(operation, page, center, distance)
         try:
-            results = search_api(url, token)
+            results = search_api(url, token, session=session)
+        except IdealistaQuotaError:
+            # Si se agotó la cuota, relanzar para detener todo el proceso inmediatamente
+            raise
         except Exception as e:
             print(f"   ⚠️ Detenida la descarga en la página {page} para '{operation}' ({e}). Conservando datos descargados.")
             break
@@ -292,7 +324,12 @@ def assign_cusec_to_csv(csv_path: str, geojson_path: str | None) -> pd.DataFrame
     return df
 
 
-def process_location(location: dict, token: str, max_pages: int = DEFAULT_MAX_PAGES) -> None:
+def process_location(
+    location: dict,
+    token: str,
+    session: requests.Session | None = None,
+    max_pages: int = DEFAULT_MAX_PAGES
+) -> None:
     name = location["name"]
     center = location["center"]
     distance = location["distance"]
@@ -301,10 +338,10 @@ def process_location(location: dict, token: str, max_pages: int = DEFAULT_MAX_PA
 
     print(f"\n📍 Procesando ubicación: {name} (Centro: {center}, Radio: {int(distance)//1000}km)...")
 
-    df_rent = get_all_results("rent", token, center, distance, max_pages=max_pages)
+    df_rent = get_all_results("rent", token, center, distance, session=session, max_pages=max_pages)
     print(f"   • Alquiler: {len(df_rent)} propiedades obtenidas")
 
-    df_sale = get_all_results("sale", token, center, distance, max_pages=max_pages)
+    df_sale = get_all_results("sale", token, center, distance, session=session, max_pages=max_pages)
     print(f"   • Venta: {len(df_sale)} propiedades obtenidas")
 
     df_total = pd.concat([df_rent, df_sale], ignore_index=True)
@@ -312,7 +349,7 @@ def process_location(location: dict, token: str, max_pages: int = DEFAULT_MAX_PA
     df_final = update_csv(csv_path, df_total)
     print(f"   • CSV actualizado en '{csv_path}' con {len(df_final)} filas acumuladas.")
 
-    if geojson_path:
+    if geojson_path and not df_total.empty:
         df_final = assign_cusec_to_csv(csv_path, geojson_path)
 
     summary_message = create_summary_message(name, csv_path, df_total, df_final)
@@ -321,7 +358,7 @@ def process_location(location: dict, token: str, max_pages: int = DEFAULT_MAX_PA
 
 def parse_args():
     default_loc = os.getenv("LOCATION", "all").lower()
-    parser = argparse.ArgumentParser(description="Actualizador de Idealista multi-ubicación con protecciones anti-bucle.")
+    parser = argparse.ArgumentParser(description="Actualizador de Idealista multi-ubicación con protecciones anti-bucle y control de cuota.")
     parser.add_argument(
         "--location", "-l",
         choices=list(LOCATIONS.keys()) + ["all"],
@@ -342,12 +379,21 @@ if __name__ == "__main__":
     target_locations = LOCATIONS.values() if args.location == "all" else [LOCATIONS[args.location]]
 
     print(f"🚀 Iniciando actualización de Idealista (Ubicación: '{args.location}', Límite máx. páginas: {args.max_pages})...")
+    session = requests.Session()
     try:
-        token = get_access_token()
+        token = get_access_token(session=session)
 
         for loc in target_locations:
             try:
-                process_location(loc, token, max_pages=args.max_pages)
+                process_location(loc, token, session=session, max_pages=args.max_pages)
+            except IdealistaQuotaError as q_err:
+                error_message = f"🚨 <b>Cuota de API Idealista agotada (HTTP 429):</b>\n\n{str(q_err)}"
+                print(f"\n❌ Deteniendo ejecución por cuota de API agotada: {q_err}")
+                try:
+                    send_telegram_message(error_message)
+                except Exception:
+                    pass
+                sys.exit(1)
             except Exception as loc_error:
                 error_message = f"❌ <b>Error al procesar {loc['name']}:</b>\n\n{str(loc_error)}"
                 print(f"Error en {loc['name']}: {loc_error}")
@@ -356,6 +402,14 @@ if __name__ == "__main__":
                 except Exception:
                     pass
 
+    except IdealistaQuotaError as q_err:
+        error_message = f"🚨 <b>Cuota de API Idealista agotada (HTTP 429):</b>\n\n{str(q_err)}"
+        print(f"\n❌ Error de cuota: {q_err}")
+        try:
+            send_telegram_message(error_message)
+        except Exception:
+            pass
+        sys.exit(1)
     except Exception as e:
         error_message = f"❌ <b>Error general en la actualización de Idealista:</b>\n\n{str(e)}"
         print(f"Error general: {e}")
@@ -363,3 +417,6 @@ if __name__ == "__main__":
             send_telegram_message(error_message)
         except Exception:
             pass
+        sys.exit(1)
+    finally:
+        session.close()
