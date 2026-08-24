@@ -56,14 +56,15 @@ python update_idealista.py --location all
 ### Safety Options:
 
 ```bash
-# Customize max pages per operation (default: 20)
-python update_idealista.py --location cordoba --max-pages 15
+# Customize max pages per operation (default: 5 to conserve API quota)
+python update_idealista.py --location cordoba --max-pages 5
 ```
 
 ## Scheduled GitHub Workflows
 
-- **La Vall d'Uixó:** Runs daily at `09:10 UTC` via `.github/workflows/update_idealista_vall.yml`.
-- **Córdoba:** Runs daily at `15:10 UTC` via `.github/workflows/update_idealista_cordoba.yml`.
+- **La Vall d'Uixó:** Runs weekly on Mondays at `09:10 UTC` (`10 9 * * 1`) via `.github/workflows/update_idealista_vall.yml`.
+- **Córdoba:** Runs every 2 days at `15:10 UTC` (`10 15 */2 * *`) via `.github/workflows/update_idealista_cordoba.yml`.
+- **Model Update:** Runs every 3 days at `00:10 UTC` via `.github/workflows/update_model.yml`.
 
 ## License
 

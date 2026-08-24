@@ -9,3 +9,6 @@ joblib
 scikit-learn
 certifi
 numpy
+curl_cffi
+beautifulsoup4
+lxml
