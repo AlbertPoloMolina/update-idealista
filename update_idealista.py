@@ -36,6 +36,7 @@ SORT = 'desc'
 REQUEST_DELAY = 1.2        # Pausa en segundos entre peticiones para respetar rate limit (1 req/s)
 REQUEST_TIMEOUT = 25       # Timeout en segundos por petición HTTP
 DEFAULT_MAX_PAGES = 5      # Límite por defecto de páginas por consulta para proteger cuota mensual
+SINCE_LAST_TWO_DAYS = "Y"
 
 # ==== CONFIGURACIÓN DE UBICACIONES ====
 LOCATIONS = {
@@ -52,6 +53,10 @@ LOCATIONS = {
         "distance": "5000",
         "csv_path": "historial_idealista_cordoba.csv",
         "geojson_path": None,
+        "operations": ("sale",),
+        "since": SINCE_LAST_TWO_DAYS,
+        "max_pages": None,
+        "unique_properties": True,
     },
 }
 
@@ -73,8 +78,14 @@ def get_access_token(session: requests.Session | None = None) -> str:
     return response.json()["access_token"]
 
 
-def define_search_url(operation: str, page: int, center: str, distance: str) -> str:
-    return (
+def define_search_url(
+    operation: str,
+    page: int,
+    center: str,
+    distance: str,
+    since: str | None = None
+) -> str:
+    url = (
         BASE_URL
         + COUNTRY
         + '/search?operation=' + operation
@@ -87,6 +98,9 @@ def define_search_url(operation: str, page: int, center: str, distance: str) -> 
         + f'&numPage={page}'
         + '&language=' + LANGUAGE
     )
+    if since is not None:
+        url += '&since=' + since
+    return url
 
 
 def search_api(url: str, token: str, session: requests.Session | None = None, max_retries: int = 3) -> dict:
@@ -144,7 +158,8 @@ def get_all_results(
     center: str,
     distance: str,
     session: requests.Session | None = None,
-    max_pages: int = DEFAULT_MAX_PAGES
+    max_pages: int | None = DEFAULT_MAX_PAGES,
+    since: str | None = None
 ) -> pd.DataFrame:
     page = 1
     all_dfs = []
@@ -152,7 +167,7 @@ def get_all_results(
 
     while True:
         # Salvaguarda 1: Límite duro contra bucles infinitos y protección de cuota
-        if page > max_pages:
+        if max_pages is not None and page > max_pages:
             print(f"   🛑 Límite de seguridad alcanzado ({max_pages} páginas) para '{operation}'. Deteniendo paginación.")
             break
 
@@ -162,7 +177,7 @@ def get_all_results(
             break
         visited_pages.add(page)
 
-        url = define_search_url(operation, page, center, distance)
+        url = define_search_url(operation, page, center, distance, since=since)
         try:
             results = search_api(url, token, session=session)
         except IdealistaQuotaError:
@@ -198,18 +213,39 @@ def get_all_results(
     return pd.concat(all_dfs, ignore_index=True)
 
 
-def update_csv(csv_path: str, new_data: pd.DataFrame) -> pd.DataFrame:
-    if new_data.empty:
-        if os.path.exists(csv_path):
+def update_csv(
+    csv_path: str,
+    new_data: pd.DataFrame,
+    operation_filter: str | None = None,
+    unique_properties: bool = False
+) -> pd.DataFrame:
+    file_exists = os.path.exists(csv_path)
+    if new_data.empty and operation_filter is None:
+        if file_exists:
             return pd.read_csv(csv_path, header=0, encoding='utf-8', low_memory=False)
         return pd.DataFrame()
 
-    if os.path.exists(csv_path):
-        old_data = pd.read_csv(csv_path, header=0, encoding='utf-8', low_memory=False)
-        combined = pd.concat([old_data, new_data], ignore_index=True)
+    old_data = pd.read_csv(csv_path, header=0, encoding='utf-8', low_memory=False) if file_exists else pd.DataFrame()
+    combined = pd.concat([old_data, new_data], ignore_index=True) if file_exists else new_data
+
+    if operation_filter is not None and not combined.empty:
+        if "operation" not in combined.columns:
+            raise KeyError("Los datos del CSV no contienen la columna 'operation'")
+        combined = combined[combined["operation"] == operation_filter]
+
+    if unique_properties and not combined.empty:
+        if "propertyCode" not in combined.columns:
+            raise KeyError("Los datos del CSV no contienen la columna 'propertyCode'")
+        has_code = combined["propertyCode"].notna()
+        coded = combined.loc[has_code].drop_duplicates(subset=["propertyCode"], keep="last")
+        uncoded = combined.loc[~has_code]
+        combined = pd.concat([coded, uncoded]).sort_index()
+    elif not combined.empty:
         combined.drop_duplicates(subset=["propertyCode", "updateDate"], inplace=True)
-    else:
-        combined = new_data
+
+    if combined.empty and not file_exists:
+        return combined
+
     combined.to_csv(csv_path, index=False, encoding='utf-8')
     return combined
 
@@ -328,7 +364,7 @@ def process_location(
     location: dict,
     token: str,
     session: requests.Session | None = None,
-    max_pages: int = DEFAULT_MAX_PAGES
+    max_pages: int | None = None
 ) -> None:
     name = location["name"]
     center = location["center"]
@@ -338,15 +374,31 @@ def process_location(
 
     print(f"\n📍 Procesando ubicación: {name} (Centro: {center}, Radio: {int(distance)//1000}km)...")
 
-    df_rent = get_all_results("rent", token, center, distance, session=session, max_pages=max_pages)
-    print(f"   • Alquiler: {len(df_rent)} propiedades obtenidas")
+    operations = location.get("operations", ("rent", "sale"))
+    location_max_pages = max_pages if max_pages is not None else location.get("max_pages", DEFAULT_MAX_PAGES)
+    since = location.get("since")
+    result_frames = []
+    for operation in operations:
+        df_operation = get_all_results(
+            operation,
+            token,
+            center,
+            distance,
+            session=session,
+            max_pages=location_max_pages,
+            since=since
+        )
+        print(f"   • {'Alquiler' if operation == 'rent' else 'Venta'}: {len(df_operation)} propiedades obtenidas")
+        result_frames.append(df_operation)
 
-    df_sale = get_all_results("sale", token, center, distance, session=session, max_pages=max_pages)
-    print(f"   • Venta: {len(df_sale)} propiedades obtenidas")
-
-    df_total = pd.concat([df_rent, df_sale], ignore_index=True)
-
-    df_final = update_csv(csv_path, df_total)
+    df_total = pd.concat(result_frames, ignore_index=True) if result_frames else pd.DataFrame()
+    operation_filter = operations[0] if len(operations) == 1 else None
+    df_final = update_csv(
+        csv_path,
+        df_total,
+        operation_filter=operation_filter,
+        unique_properties=location.get("unique_properties", False)
+    )
     print(f"   • CSV actualizado en '{csv_path}' con {len(df_final)} filas acumuladas.")
 
     if geojson_path and not df_total.empty:
@@ -368,8 +420,8 @@ def parse_args():
     parser.add_argument(
         "--max-pages", "-m",
         type=int,
-        default=DEFAULT_MAX_PAGES,
-        help=f"Límite máximo de páginas por operación (por defecto: {DEFAULT_MAX_PAGES})."
+        default=None,
+        help=f"Límite máximo de páginas por operación (por defecto: según ubicación; {DEFAULT_MAX_PAGES} para las ubicaciones sin límite propio)."
     )
     return parser.parse_args()
 
@@ -378,7 +430,8 @@ if __name__ == "__main__":
     args = parse_args()
     target_locations = LOCATIONS.values() if args.location == "all" else [LOCATIONS[args.location]]
 
-    print(f"🚀 Iniciando actualización de Idealista (Ubicación: '{args.location}', Límite máx. páginas: {args.max_pages})...")
+    page_limit = args.max_pages if args.max_pages is not None else "según ubicación"
+    print(f"🚀 Iniciando actualización de Idealista (Ubicación: '{args.location}', Límite máx. páginas: {page_limit})...")
     session = requests.Session()
     try:
         token = get_access_token(session=session)
