@@ -8,7 +8,7 @@ This Python script automates the retrieval of real estate data from the Idealist
 - **Multi-location & Independent Searches:** Execute searches separately per location (La Vall d'Uixó 5km, Córdoba 5km) or altogether.
 - **Anti-Loop & Quota Protections:** Hard page limit safeguards (`--max-pages`), duplicate page cycle detection, request timeouts (25s), exponential backoff retries on rate limits (HTTP 429), and request pacing (1.2s delay).
 - **Independent Storage:** Updates separate historical CSV files (`historial_idealista.csv` and `historial_idealista_cordoba.csv`), deduplicating La Vall entries by `[propertyCode, updateDate]` and keeping only one sale listing per `propertyCode` in Córdoba.
-- **Córdoba Search:** Searches sale listings published in the last two days, and follows all result pages returned by the API.
+- **Córdoba Search:** Searches only sale listings published in the last two days (`since=Y`), with a five-page safety cap (up to 250 listings per run).
 - **Automated Staggered Workflows:** GitHub Actions runs each location independently at different hours to avoid API saturation.
 - **Telegram Notifications:** Sends detailed summary statistics per location after each run.
 
@@ -57,7 +57,7 @@ python update_idealista.py --location all
 ### Safety Options:
 
 ```bash
-# Customize max pages per operation (default: 5 for La Vall; no page cap for Córdoba)
+# Customize max pages per operation (default: 5 for both locations)
 python update_idealista.py --location cordoba --max-pages 5
 ```
 

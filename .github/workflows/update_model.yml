@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: main-data-updates
+  cancel-in-progress: false
+
 jobs:
   run-script:
     runs-on: ubuntu-latest
@@ -39,4 +43,5 @@ jobs:
          git config --global user.email "apolomo@uoc.edu"
          git add modelado/
          git commit -m "Update modelos [skip ci]" || echo "No changes to commit"
+         git pull --rebase origin main
          git push

@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: main-data-updates
+  cancel-in-progress: false
+
 jobs:
   run-script:
     runs-on: ubuntu-latest
@@ -40,6 +44,7 @@ jobs:
           if [ -f historial_idealista_cordoba.csv ]; then
             git add historial_idealista_cordoba.csv
             git commit -m "Update CSV Cordoba [skip ci]" || echo "No changes to commit"
+            git pull --rebase origin main
             git push
           else
             echo "No se encontró el archivo CSV para comitear."

@@ -36,7 +36,7 @@ SORT = 'desc'
 REQUEST_DELAY = 1.2        # Pausa en segundos entre peticiones para respetar rate limit (1 req/s)
 REQUEST_TIMEOUT = 25       # Timeout en segundos por petición HTTP
 DEFAULT_MAX_PAGES = 5      # Límite por defecto de páginas por consulta para proteger cuota mensual
-SINCE_LAST_TWO_DAYS = "Y"
+SINCE_LAST_TWO_DAYS = "Y"  # Idealista API: last two days for sale listings
 
 # ==== CONFIGURACIÓN DE UBICACIONES ====
 LOCATIONS = {
@@ -55,7 +55,7 @@ LOCATIONS = {
         "geojson_path": None,
         "operations": ("sale",),
         "since": SINCE_LAST_TWO_DAYS,
-        "max_pages": None,
+        "max_pages": DEFAULT_MAX_PAGES,
         "unique_properties": True,
     },
 }
